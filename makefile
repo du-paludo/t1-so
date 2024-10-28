@@ -1,5 +1,5 @@
 flags = -Wall -std=c99
-nome = conway
+nome = main
 
 all: $(nome)
 
