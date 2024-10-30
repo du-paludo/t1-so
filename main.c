@@ -28,7 +28,7 @@ typedef struct fifoQ_s {
     pthread_mutex_t lock;
     sem_t waitSem;
     int count;
-    int nextToRelease;
+    int proximo;
 } FifoQT; 
 
 barrier_t* barr;
@@ -47,52 +47,47 @@ void process_barrier(barrier_t* barr) {
         pthread_mutex_unlock(&(barr->lock));
     }
 
-    printf("Barrier counter: %d\n", barr->counter);
     if (barr->counter == barr->n) {
         for (int i = 0; i < barr->n; i++) {
-            printf("Liberando...\n");
+            // printf("Liberando...\n");
             sem_post(&(barr->semaphore));
         }
     }
 
     sem_wait(&barr->semaphore);
+    print("Ok");
 }
 
 void espera(FifoQT* F) {
+    int posicao;
     if (!pthread_mutex_lock(&F->lock)) {
-        int myPosition = F->count++;
+        posicao = F->count++;
         pthread_mutex_unlock(&F->lock);
+    }
 
-        while (1) {
-            if (!pthread_mutex_lock(&F->lock)) {
-                if (F->nextToRelease == myPosition) {
-                    printf("oiii\n");
-                    break;
-                }
+    while (1) {
+        if (!pthread_mutex_lock(&F->lock)) {
+            if (F->proximo == posicao) {
+                F->proximo++;
                 pthread_mutex_unlock(&F->lock);
-                sem_wait(&F->waitSem);
+                break;
             }
+            pthread_mutex_unlock(&F->lock);
+            sem_wait(&F->waitSem);
         }
     }
     printf("Saindo do espera\n");
 }
 
 void liberaPrimeiro(FifoQT* F) {
-    if (!pthread_mutex_lock(&F->lock)) {
-        F->nextToRelease++;
-        if (F->count > 0) {
-            F->count--;
-            sem_post(&F->waitSem);
-        }
-        pthread_mutex_unlock(&F->lock);
-    }
+    sem_post(&F->waitSem);
 }
 
 void init_fifoQ(FifoQT* F) {
     pthread_mutex_init(&F->lock, NULL);
     sem_init(&F->waitSem, 0, 1);
     F->count = 0;
-    F->nextToRelease = 0;
+    F->proximo = 0;
 }
 
 void processo(int nProc) {
@@ -107,19 +102,19 @@ void processo(int nProc) {
 
     for (int uso = 0; uso < 3; uso++) {
         // (A) Prologo
-        int tempoPrologo = rand() % 4;
+        int tempoPrologo = rand() % 4 + 1;
         printf( "Processo: %d Prologo: %d de %d segundos\n", nProc, uso, tempoPrologo);
         sleep(tempoPrologo);
         espera(&fila);
 
         // (B) Uso do recurso
-        int tempoUso = rand() % 4;
+        int tempoUso = rand() % 4 + 1;
         printf( "Processo: %d USO: %d por %d segundos\n", nProc, uso, tempoUso);
         sleep(tempoUso);
         liberaPrimeiro(&fila);
 
         // (C) Epílogo
-        int tempoEpilogo = rand() % 4;
+        int tempoEpilogo = rand() % 4 + 1;
         printf( "Processo: %d Epilogo: %d de %d segundos\n", nProc, uso, tempoEpilogo);
         sleep(tempoEpilogo);
 

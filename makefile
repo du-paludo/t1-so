@@ -1,4 +1,4 @@
-flags = -Wall -std=c99
+flags = -std=c99
 nome = main
 
 all: $(nome)
