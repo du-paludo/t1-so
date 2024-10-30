@@ -25,6 +25,10 @@ typedef struct fifoQ_s {
     int next; // Próximo a ser liberado
 } FifoQT; 
 
+// Variáveis globais
+barrier_t* barr;
+FifoQT* fila;
+
 // Retorna horário atual do sistema
 char* get_current_time() {
     static char time_str[9];
@@ -42,11 +46,13 @@ void init_barr(barrier_t* barr, int n) {
 }
 
 void process_barrier(barrier_t* barr) {
+    // Incrementa o contador
     if (!pthread_mutex_lock(&(barr->lock))) {
         barr->counter++;
         pthread_mutex_unlock(&(barr->lock));
     }
 
+    // Se o contador for igual ao número de processos, libera todos os processos
     if (barr->counter == barr->n) {
         for (int i = 0; i < barr->n; i++) {
             sem_post(&(barr->semaphore));
@@ -59,15 +65,17 @@ void process_barrier(barrier_t* barr) {
 
 void espera(FifoQT* F, int nProc) {
     printf("%s - Processo %d entrando na fila...\n", get_current_time(), nProc);
-    int posicao;
+    int position = -1;
+    // Define a posição do processo na fila e incrementa o contador
     if (!pthread_mutex_lock(&(F->lock))) {
-        posicao = F->count++;
+        position = F->count++;
         pthread_mutex_unlock(&(F->lock));
-        printf("%s - Processo: %d, Posição: %d\n", get_current_time(), nProc, posicao);
+        printf("%s - Processo: %d, Posição: %d\n", get_current_time(), nProc, position);
     }
 
+    // Executa um loop infinito até o próximo ser igual à posição
     while (1) {
-        if (F->proximo == posicao) {
+        if (F->next == position) {
             break;
         }
     }
@@ -75,28 +83,33 @@ void espera(FifoQT* F, int nProc) {
 }
 
 void liberaPrimeiro(FifoQT* F, int nProc) {
+    // Incrementa o próximo a ser liberado
     if (!pthread_mutex_lock(&F->lock)) {
-        F->proximo++;
+        F->next++;
         pthread_mutex_unlock(&(F->lock));
     }
     printf("%s - Processo %d liberando a fila...\n", get_current_time(), nProc);
 }
 
+// Inicializa a fila
 void init_fifoQ(FifoQT* F) {
     pthread_mutex_init(&F->lock, NULL);
-    sem_init(&F->waitSem, 0, 1);
     F->count = 0;
-    F->proximo = 0;
+    F->next = 0;
 }
 
 void processo(int nProc) {
+    // Define seed aleatória para o random
     srand(time(NULL) + nProc);
 
-    int sleep_time = rand() % 4 + 1;
+    int sleep_time = rand() % 4;
     printf("%s - Processo: %d, Pai: %d, nProc: %d\n", get_current_time(), getpid(), getppid(), nProc);
     printf("%s - Processo %d vai dormir por %d segundos\n", get_current_time(), nProc, sleep_time);
+
+    // Dorme por um tempo aleatório e entra na barreira
     sleep(sleep_time);
     process_barrier(barr);
+
     printf("%s - Processo %d saiu da barreira\n", get_current_time(), nProc);
 
     for (int uso = 0; uso < 3; uso++) {
@@ -119,14 +132,10 @@ void processo(int nProc) {
     }
 }
 
-// Variáveis globais
-
-barrier_t* barr;
-FifoQT* fila;
-
 int main(int argc, char* argv[]) {
     int n;
 
+    // Número total de processos
     if (argc != 2) {
          printf("%s - Usage: %s <nTotalProcesses>\n", get_current_time(), argv[0]); 
          return 0;
@@ -134,31 +143,18 @@ int main(int argc, char* argv[]) {
         n = atoi(argv[1]);
     }
 
-    // -- INICIALIZAÇÃO DA SHARED MEMORY
+    // Retorna um identificador para a região da memória compartilhada
+    int barr_shmid = shmget(2378, sizeof(barrier_t), 0666 | IPC_CREAT);
+    int fifo_shmid = shmget(2379, sizeof(FifoQT), 0666 | IPC_CREAT);
 
-    // chamada de sistema para gerar uma chave única
-    // key_t barr_key = ftok("makefile", 65);
-    // key_t fifo_key = ftok("makefile", 65);
-    key_t barr_key = 2378;
-    key_t fifo_key = 2379;
-
-    // printf("%d %d\n", barr_key, fifo_key);
-
-    // shmget returns an identifier in shmid
-    int barr_shmid = shmget(barr_key, sizeof(barrier_t), 0666 | IPC_CREAT);
-    int fifo_shmid = shmget(fifo_key, sizeof(FifoQT), 0666 | IPC_CREAT);
-
-    // shmat to attach to shared memory
-    // retorna o endereço inicial do segmento de memória
+    // Retorna o endereço inicial do segmento de memória
     barr = (barrier_t*) shmat(barr_shmid, (void*)0, 0);
     fila = (FifoQT*) shmat(fifo_shmid, (void*)0, 0);
 
-    // -- INICIALIZAÇÃO DA BARREIRA E DA FILA
     init_barr(barr, n);
-
     init_fifoQ(fila);
 
-    // -- CRIAÇÃO DE PROCESSOS
+    // Cria os processos
     for (int i = 1; i < n; i++) {
         pid_t pid = fork();
         if (pid == 0) {
@@ -168,20 +164,19 @@ int main(int argc, char* argv[]) {
     }
     processo(0);
 
+    // Processo pai espera todos os processos terminarem
     for (int i = 0; i < n-1; i++) {
         wait(NULL);
     }
 
-    // -- DEINIT
+    // Libera os semáforos e mutex
+    sem_destroy(&(barr->semaphore));
+    pthread_mutex_destroy(&(barr->lock));
+    pthread_mutex_destroy(&(fila->lock));
 
-    sem_destroy(&barr->semaphore);
-    sem_destroy(&fila->waitSem);
-
-    // detach from shared memory
+    // Libera a memória compartilhada
     shmdt(barr);
     shmdt(fila);
-
-    // libera shared memory
     shmctl(barr_shmid, IPC_RMID, NULL);
     shmctl(fifo_shmid, IPC_RMID, NULL);
 
